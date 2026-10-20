@@ -1,0 +1,77 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show repository files
+        run: ls -la
+
+      - name: Unzip project bundle if uploaded as zip
+        run: |
+          set -e
+          if ls *.zip >/dev/null 2>&1; then
+            mkdir -p src
+            for f in *.zip; do
+              echo "unzipping $f"
+              unzip -o "$f" -d src
+            done
+          fi
+          find . -maxdepth 5 -name "*.xcodeproj" -print || true
+
+      - name: Resolve Xcode project path
+        id: project
+        run: |
+          set -e
+          PROJ=$(find . -maxdepth 5 -name "*.xcodeproj" | grep -v DerivedData | head -1)
+          if [ -z "$PROJ" ]; then
+            echo "::error::No .xcodeproj found in repository"
+            exit 1
+          fi
+          echo "project=$PROJ" >> "$GITHUB_OUTPUT"
+          echo "Found Xcode project: $PROJ"
+
+      - name: Build iOS app (unsigned)
+        run: |
+          set -e
+          xcodebuild \
+            -project "${{ steps.project.outputs.project }}" \
+            -scheme LegoStepAnalyzer \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP=$(find build/Build/Products -maxdepth 2 -name "LegoStepAnalyzer.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::Built app not found"
+            exit 1
+          fi
+          echo "App bundle: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r LegoStepAnalyzer-unsigned.ipa Payload/
+          ls -la LegoStepAnalyzer-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LegoStepAnalyzer-unsigned-ipa
+          path: LegoStepAnalyzer-unsigned.ipa
+          if-no-files-found: error
